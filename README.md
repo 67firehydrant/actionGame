@@ -20,7 +20,7 @@ npm run start
 
 ## GitHub Action: Next.js build + TryCloudflare test server
 
-Repo ini sudah disiapkan workflow GitHub Actions di `.github/workflows/nextjs-trycloudflare.yml` untuk:
+Repo ini sudah disiapkan template workflow GitHub Actions di `docs/github-workflows/nextjs-trycloudflare.yml` untuk:
 
 1. install dependency Node.js,
 2. build aplikasi Next.js,
@@ -32,16 +32,12 @@ Repo ini sudah disiapkan workflow GitHub Actions di `.github/workflows/nextjs-tr
 
 ### Cara pakai
 
-1. Pastikan repo sudah berisi aplikasi Next.js dengan `package.json` dan script umum seperti:
-   ```json
-   {
-     "scripts": {
-       "build": "next build",
-       "start": "next start"
-     }
-   }
+1. Aktifkan workflow dengan menyalin template ke folder workflow GitHub:
+   ```bash
+   mkdir -p .github/workflows
+   cp docs/github-workflows/nextjs-trycloudflare.yml .github/workflows/nextjs-trycloudflare.yml
    ```
-2. Push perubahan ke GitHub.
+2. Commit dan push dengan token/user GitHub yang punya permission `workflow`.
 3. Untuk build biasa, workflow otomatis berjalan pada `push` dan `pull_request`.
 4. Untuk menjalankan server test online:
    - buka tab **Actions** di GitHub,

@@ -1,0 +1,153 @@
+name: Next.js CI + TryCloudflare Test Server
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "How long to keep the test server/tunnel alive. GitHub-hosted runners are limited, so keep this under ~350 minutes."
+        required: false
+        default: "330"
+      port:
+        description: "Local port used by the Next.js server."
+        required: false
+        default: "3000"
+      health_path:
+        description: "Path used for local health checks."
+        required: false
+        default: "/"
+      build_command:
+        description: "Optional custom build command. Leave empty to auto-detect from package manager."
+        required: false
+        default: ""
+      start_command:
+        description: "Optional custom start command. Leave empty to auto-detect from package manager."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Next.js and optionally expose test server
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      NODE_VERSION: "22"
+      PORT: ${{ github.event.inputs.port || '3000' }}
+      HEALTH_PATH: ${{ github.event.inputs.health_path || '/' }}
+      DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '330' }}
+      BUILD_COMMAND_INPUT: ${{ github.event.inputs.build_command || '' }}
+      START_COMMAND: ${{ github.event.inputs.start_command || '' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Detect package manager
+        id: pm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f package.json ]; then
+            echo "::error::package.json was not found. Add the Next.js app files before running this workflow."
+            exit 1
+          fi
+
+          package_manager="$(node -p "try { require('./package.json').packageManager || '' } catch { '' }")"
+
+          if [[ "$package_manager" == pnpm@* ]] || [ -f pnpm-lock.yaml ]; then
+            pm="pnpm"
+            install="pnpm install --frozen-lockfile"
+            build="pnpm run build"
+            start="pnpm run start"
+          elif [[ "$package_manager" == yarn@* ]] || [ -f yarn.lock ]; then
+            pm="yarn"
+            if [[ "$package_manager" == yarn@2* ]] || [[ "$package_manager" == yarn@3* ]] || [[ "$package_manager" == yarn@4* ]]; then
+              install="yarn install --immutable"
+            else
+              install="yarn install --frozen-lockfile"
+            fi
+            build="yarn build"
+            start="yarn start"
+          elif [[ "$package_manager" == bun@* ]] || [ -f bun.lockb ] || [ -f bun.lock ]; then
+            pm="bun"
+            install="bun install --frozen-lockfile"
+            build="bun run build"
+            start="bun run start"
+          else
+            pm="npm"
+            if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+              install="npm ci"
+            else
+              install="npm install"
+            fi
+            build="npm run build"
+            start="npm run start"
+          fi
+
+          echo "pm=$pm" >> "$GITHUB_OUTPUT"
+          echo "install=$install" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "start=$start" >> "$GITHUB_OUTPUT"
+          echo "Detected package manager: $pm"
+
+      - name: Setup Bun
+        if: steps.pm.outputs.pm == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        shell: bash
+        run: ${{ steps.pm.outputs.install }}
+
+      - name: Build Next.js app
+        shell: bash
+        env:
+          DEFAULT_BUILD_COMMAND: ${{ steps.pm.outputs.build }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BUILD_COMMAND_INPUT}" ]; then
+            echo "Running custom build command: ${BUILD_COMMAND_INPUT}"
+            bash -lc "${BUILD_COMMAND_INPUT}"
+          else
+            echo "Running default build command: ${DEFAULT_BUILD_COMMAND}"
+            bash -lc "${DEFAULT_BUILD_COMMAND}"
+          fi
+
+      - name: Verify cloudflared for TryCloudflare tunnel
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: ./node_modules/@farthershore/cloudflared-linux-x64/bin/cloudflared --version
+
+      - name: Start Next.js server and TryCloudflare tunnel
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          DEFAULT_START_COMMAND: ${{ steps.pm.outputs.start }}
+        run: .github/scripts/trycloudflare-next.sh
+
+      - name: Upload server and tunnel logs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-trycloudflare-logs
+          path: |
+            next-server.log
+            cloudflared.log
+          if-no-files-found: ignore

@@ -1,0 +1,85 @@
+name: Next.js CI + Tailscale Test Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      expose_mode:
+        description: "serve = tailnet private, funnel = public internet"
+        required: true
+        default: "serve"
+        type: choice
+        options:
+          - serve
+          - funnel
+      duration_minutes:
+        description: "How long to keep the test server online. GitHub-hosted runners are limited; keep under ~350 minutes."
+        required: false
+        default: "330"
+      port:
+        description: "Local port used by the Next.js server."
+        required: false
+        default: "3000"
+      health_path:
+        description: "Path used for local health checks."
+        required: false
+        default: "/"
+      start_command:
+        description: "Optional custom start command. Leave empty for npm run start."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  tailscale-test-server:
+    name: Build Next.js and expose through Tailscale
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      NODE_VERSION: "22"
+      PORT: ${{ github.event.inputs.port || '3000' }}
+      HEALTH_PATH: ${{ github.event.inputs.health_path || '/' }}
+      DURATION_MINUTES: ${{ github.event.inputs.duration_minutes || '330' }}
+      START_COMMAND: ${{ github.event.inputs.start_command || '' }}
+      EXPOSE_MODE: ${{ github.event.inputs.expose_mode || 'serve' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Next.js app
+        run: npm run build
+
+      - name: Connect runner to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          hostname: actiongame-${{ github.run_id }}
+
+      - name: Start Next.js server and Tailscale proxy
+        env:
+          DEFAULT_START_COMMAND: npm run start
+        run: .github/scripts/tailscale-next.sh
+
+      - name: Upload server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-tailscale-logs
+          path: next-server.log
+          if-no-files-found: ignore
